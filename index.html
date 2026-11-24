@@ -38,6 +38,9 @@ body.fl{background:#02040a}
 .scene{position:absolute;inset:0;opacity:0;pointer-events:none;transition:opacity .5s ease,transform .6s cubic-bezier(.2,.7,.2,1);
   transform:translateY(26px) scale(.985);padding:52px 76px 148px;display:flex;flex-direction:column}
 .scene.on{opacity:1;pointer-events:auto;transform:none;z-index:5}
+/* Touch devices change scenes instantly so a freshly selected page never shows the previous one underneath. */
+body.tch .scene{visibility:hidden;transition:none;transform:none}
+body.tch .scene.on{visibility:visible}
 
 /* ---------- 通用版式 ---------- */
 .eyebrow{display:inline-flex;align-items:center;gap:10px;font-size:18px;letter-spacing:0;color:var(--c-sense);
@@ -1372,10 +1375,11 @@ function vpSize(){
   if(FL){return{w:Math.max(w,h,1),h:Math.max(Math.min(w,h),1)};}
   return{w:Math.max(w,1),h:Math.max(h,1)};
 }
-let fitRaf=0;
+let fitRaf=0,stageScale=1;
 function fit(){
   flApply();
   const{w,h}=vpSize();const s=Math.min(w/1920,h/1080);
+  stageScale=s;
   stage.style.transform='scale('+s+')';
   /* 非全屏时让页面背景与舞台无缝衔接，避免两侧生硬黑边 */
   const offY=Math.max(0,(h-1080*s)/2),offX=Math.max(0,(w-1920*s)/2);
@@ -1460,7 +1464,6 @@ function fsBtnSync(){
       if(Math.abs(dx)>64&&Math.abs(dy)<50)go2=(dx<0)?1:-1;
     }
     if(go2===null)return;
-    if((typeof auto!=='undefined')&&auto)stopAuto();   /* 手动接管时停下自动演示 */
     page(go2);
   },{passive:true});
 })();
@@ -1482,8 +1485,23 @@ function rotSync(){
 }
 document.getElementById('rotSkip').onclick=function(){rotDismissed=true;rotSync();};
 fit();
-function cvFit(cv){const r=cv.getBoundingClientRect(),d=devicePixelRatio||1;
-  cv.width=Math.round(r.width*d);cv.height=Math.round(r.height*d);return d;}
+/* Draw in local stage pixels. Only the backing resolution follows the displayed scale and screen density. */
+function cvFit(cv){
+  const d=Math.min(2,(window.devicePixelRatio||1)*stageScale);
+  const width=Math.max(1,Math.round(cv.clientWidth*d));
+  const height=Math.max(1,Math.round(cv.clientHeight*d));
+  if(cv.width!==width)cv.width=width;
+  if(cv.height!==height)cv.height=height;
+  return d;
+}
+/* Convert viewport input to relative local coordinates, including the forced 90-degree landscape rotation. */
+function canvasPoint(cv,e){
+  const rect=cv.getBoundingClientRect();
+  if(!rect.width||!rect.height)return null;
+  const u=(e.clientX-rect.left)/rect.width;
+  const v=(e.clientY-rect.top)/rect.height;
+  return FL?[v,1-u]:[u,v];
+}
 const WEEK=['日','一','二','三','四','五','六'];
 function tickClock(){const d=new Date();const p=n=>String(n).padStart(2,'0');
   document.getElementById('clock').textContent=
@@ -1500,6 +1518,10 @@ scenes.forEach((s,i)=>{const d=document.createElement('div');d.className='dot';d
   d.onclick=()=>go(i);dots.appendChild(d);});
 function go(i){
   if(i<0||i>=scenes.length)return;
+  if(cur!==i&&(auto||autoPaused))stopAuto();
+  showScene(i);
+}
+function showScene(i){
   const prev=cur;
   scenes[cur].classList.remove('on');cur=i;scenes[i].classList.add('on');
   [...dots.children].forEach((d,k)=>d.classList.toggle('on',k===i));
@@ -2020,8 +2042,9 @@ class Globe{
   proj(lon,lat){const R=this.R,a=(lon*Math.PI/180)+this.rot,b=lat*Math.PI/180;
     const x=R*Math.cos(b)*Math.sin(a),y=-R*Math.sin(b),z=Math.cos(b)*Math.cos(a);return[x,y,z];}
   draw(){
+    if(cur!==0){requestAnimationFrame(()=>this.draw());return;}
     const cv=this.cv,d=cvFit(cv),g=cv.getContext('2d');
-    const W=cv.width/d,H=cv.height/d;g.setTransform(d,0,0,d,0,0);g.clearRect(0,0,W,H);
+    const W=cv.clientWidth,H=cv.clientHeight;g.setTransform(d,0,0,d,0,0);g.clearRect(0,0,W,H);
     const cx=this.cx||W/2+this.cx2, cy=this.cy||H/2+this.cy2, R=this.R;
     // 星空
     if(this.stars){this.pts.forEach(p=>{const a=p.a*(.6+.4*Math.sin(this.t*.02+p.p));
@@ -2133,13 +2156,13 @@ function senImgGet(mode){
   return im;
 }
 function buildBase(){
-  const d=cvFit(senCv),W=senCv.width/d,H=senCv.height/d;senW=W;senH=H;
+  const W=senCv.clientWidth,H=senCv.clientHeight;senW=W;senH=H;
   senBase=new Float32Array(Math.floor(W/3)*Math.floor(H/3));
   let i=0;for(let y=0;y<H;y+=3)for(let x=0;x<W;x+=3){senBase[i++]=fbm(x/140,y/140,5);}
 }
 function drawSense2(){
   const d=cvFit(senCv),g=senCv.getContext('2d');
-  const W=senCv.width/d,H=senCv.height/d;
+  const W=senCv.clientWidth,H=senCv.clientHeight;
   /* 画布尺寸变化（全屏切换 / 平板旋转 / 窗口缩放）时自动重建底图，修复不随布局缩放的问题 */
   if(!senBase||Math.abs(W-senW)>2||Math.abs(H-senH)>2)buildBase();
   g.setTransform(d,0,0,d,0,0);g.clearRect(0,0,W,H);
@@ -2284,8 +2307,11 @@ let curLoc=null,curPick=null,flowTip='',flowSeq=0,flowTimer=null;
 
 function fmtLon(v){return Math.abs(v).toFixed(1)+'°'+(v>=0?'E':'W');}
 function fmtLat(v){return Math.abs(v).toFixed(1)+'°'+(v>=0?'N':'S');}
-function pickXY(e){const r=mapCv.getBoundingClientRect();
-  return[(e.clientX-r.left)/r.width*360-180, 90-(e.clientY-r.top)/r.height*180];}
+function pickXY(e){
+  const point=canvasPoint(mapCv,e);
+  if(!point)return null;
+  return[point[0]*360-180,90-point[1]*180];
+}
 /* 射线法：判定该经纬度落在陆地还是海面 —— 用于给自定义点位如实定性 */
 function isLand(lon,lat){let c=false;
   for(let n=0;n<LAND.length;n++){const r=LAND[n];
@@ -2305,7 +2331,8 @@ function rr(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);
   g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();}
 
 function drawMap(){
-  const d=cvFit(mapCv),g=mapCv.getContext('2d'),W=mapCv.width/d,H=mapCv.height/d;
+  if(cur!==3){mapCv._run=0;return;}
+  const d=cvFit(mapCv),g=mapCv.getContext('2d'),W=mapCv.clientWidth,H=mapCv.clientHeight;
   g.setTransform(d,0,0,d,0,0);g.clearRect(0,0,W,H);
   /* 等距圆柱投影：360°×180° = 严格 2:1，画布已按该比例设置，不再拉伸 */
   const P=(lon,lat)=>[(lon+180)/360*W,(90-lat)/180*H];
@@ -2418,10 +2445,10 @@ function drawMap(){
 }
 
 /* ---- 点位拾取：鼠标处真坐标 → 就近吸附 / 如实新建自定义点位 ---- */
-mapCv.onmousemove=e=>{const[lon,lat]=pickXY(e);
+mapCv.onmousemove=e=>{const point=pickXY(e);if(!point)return;const[lon,lat]=point;
   document.getElementById('mapCoord').textContent=fmtLon(lon)+' · '+fmtLat(lat);};
 mapCv.onclick=e=>{
-  const[lon,lat]=pickXY(e);
+  const point=pickXY(e);if(!point)return;const[lon,lat]=point;
   const[best,dist]=nearestLoc(lon,lat);
   if(dist<=9){curLoc=best;curPick=dist>1.6?{lon:lon,lat:lat}:null;}
   else{
@@ -2558,8 +2585,7 @@ const INDC=['#ff5c6c','#4fd1ff','#3ddc84','#25e6c0'];
 const INDTAGS=['应急管理 · 实时态势底图','智慧城市 · 城市体检底图','农林水利 · 耕地长势底图','生态环保 · 红线监测底图'];
 let vizCur=0,vizPrev=0,vizFade=1;
 const rnd=i=>{const x=Math.sin(i*127.1+311.7)*43758.5;return x-Math.floor(x);};
-function fitCv(cv){const r=Math.min(window.devicePixelRatio||1,2),w=cv.clientWidth||10,h=cv.clientHeight||10;
-  if(cv.width!==Math.round(w*r)||cv.height!==Math.round(h*r)){cv.width=Math.round(w*r);cv.height=Math.round(h*r);}
+function fitCv(cv){const r=cvFit(cv);
   const g=cv.getContext('2d');g.setTransform(r,0,0,r,0,0);return g;}
 function ridge(g,w,h,base,amp,seed,c){g.beginPath();g.moveTo(0,h);
   for(let x=0;x<=w;x+=8){const y=base+Math.sin(x*.012+seed)*amp+Math.sin(x*.031+seed*2)*amp*.4;g.lineTo(x,y);}
@@ -2819,12 +2845,12 @@ function simAuto(i){
 /* 推演态势图 */
 const simCv=document.getElementById('simCv');
 let simBase=null,simW=0,simH=0;
-function simBuild(){const d=cvFit(simCv),W=simCv.width/d,H=simCv.height/d;simW=W;simH=H;
+function simBuild(){const W=simCv.clientWidth,H=simCv.clientHeight;simW=W;simH=H;
   simBase=new Float32Array(Math.floor(W/4)*Math.floor(H/4));let i=0;
   for(let y=0;y<H;y+=4)for(let x=0;x<W;x+=4)simBase[i++]=fbm(x/120+3,y/120+5,5);}
 function drawSim(prog,conf){
   const d=cvFit(simCv),g=simCv.getContext('2d');
-  const W=simCv.width/d,H=simCv.height/d;
+  const W=simCv.clientWidth,H=simCv.clientHeight;
   if(!simBase||Math.abs(W-simW)>2||Math.abs(H-simH)>2)simBuild();
   g.setTransform(d,0,0,d,0,0);g.clearRect(0,0,W,H);
   const kind=SIM[simIdx].k,step=4,cols=Math.floor(W/step),rows=Math.floor(H/step);
@@ -3204,7 +3230,7 @@ function gBake(){
   const tag=gE('gSceneTag');
   if(tag)tag.textContent='演练沙盘 · '+GSC[G.sc].n+' · '+((G.mapAlt&&G.sc===1)?'城市路网示意':GSCEN_TAGS[G.sc]);
 }
-function gBuild(){const d=cvFit(gameCv);gW=gameCv.width/d;gH=gameCv.height/d;if(gBaseKey!==gKey())gBake();}
+function gBuild(){cvFit(gameCv);gW=gameCv.clientWidth;gH=gameCv.clientHeight;if(gBaseKey!==gKey())gBake();}
 function gClearTimers(){G.timers.forEach(clearTimeout);G.timers=[];}
 function gSched(fn,ms){const id=setTimeout(fn,ms);(G.auto?autoT:G.timers).push(id);return id;}
 function gStopAll(){G.auto=false;gClearTimers();}
@@ -3514,7 +3540,7 @@ function drawIrrIcon(g,x,y,s,t){
 
 /* ---------- 演练沙盘动画 ---------- */
 function drawGame(){
-  const d=cvFit(gameCv),g=gameCv.getContext('2d'),W=gameCv.width/d,H=gameCv.height/d;gW=W;gH=H;
+  const d=cvFit(gameCv),g=gameCv.getContext('2d'),W=gameCv.clientWidth,H=gameCv.clientHeight;gW=W;gH=H;
   g.setTransform(d,0,0,d,0,0);g.clearRect(0,0,W,H);
   if(!gBase||gBaseKey!==gKey())gBuild();
   if(gBase){g.save();g.setTransform(1,0,0,1,0,0);g.drawImage(gBase,0,0);g.restore();}
@@ -3715,7 +3741,7 @@ function cdStart(ms){
 function runAuto(i){
   if(!auto)return;
   autoPageT0=Date.now();
-  go(i);if(i!==7&&ENTERS[i])ENTERS[i]();AUTO[i].f&&AUTO[i].f();
+  showScene(i);if(i!==7&&ENTERS[i])ENTERS[i]();AUTO[i].f&&AUTO[i].f();
   cdStart(AUTO[i].d);
   if(i!==7)autoT.push(setTimeout(()=>{if(!auto)return;runAuto((i+1)%scenes.length);},AUTO[i].d));
 }
@@ -3811,10 +3837,10 @@ const LANDP=[];
 (function(){for(let n=0;n<LAND.length;n++){const r=LAND[n],o=[];
   for(let i=0;i<r.length;i+=4){o.push(r[i],r[i+1]);}
   if(o.length>6)LANDP.push(o);}})();
-function orbSize(){const r=orbCv.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);
-  const w=Math.max(10,Math.round(r.width)),h=Math.max(10,Math.round(r.height));
-  if(orbCv.width!==Math.round(w*d)||orbCv.height!==Math.round(h*d)){orbCv.width=Math.round(w*d);orbCv.height=Math.round(h*d);}
-  return {g:orbCv.getContext('2d'),d:d,W:w,H:h};}
+function orbSize(){
+  const d=cvFit(orbCv);
+  return {g:orbCv.getContext('2d'),d:d,W:orbCv.clientWidth,H:orbCv.clientHeight};
+}
 function vec3(lat,lon){const a=lat*Math.PI/180,b=lon*Math.PI/180;return[Math.cos(a)*Math.sin(b),Math.sin(a),Math.cos(a)*Math.cos(b)];}
 function tilt3(p,tt){const ct=Math.cos(tt),st=Math.sin(tt);return[p[0],p[1]*ct-p[2]*st,p[1]*st+p[2]*ct];}
 function satVec(s,u){let x=Math.cos(u)*s.rf,y=0,z=Math.sin(u)*s.rf;
@@ -3923,10 +3949,12 @@ function drawOrb(){
         ' ｜ 覆盖半径 '+(6371*s.alpha).toFixed(0)+' km ｜ 覆盖面积 '+(ar/1e4).toFixed(0)+' 万 km²'+
         ' ｜ '+(o.z>0?'当前位于地球正面':'已转到地球背面');}}
 }
-function orbPick(e,r){const rect=orbCv.getBoundingClientRect();
-  const x=e.clientX-rect.left,y=e.clientY-rect.top;let best=-1,bd=1e9;
+function orbPick(e,r){
+  const point=canvasPoint(orbCv,e);if(!point)return -1;
+  const x=point[0]*orbCv.clientWidth,y=point[1]*orbCv.clientHeight;
+  let best=-1,bd=Infinity;
   lastSP.forEach(o=>{const dd=Math.hypot(o.x-x,o.y-y);if(dd<bd){bd=dd;best=o.i;}});
-  return bd<r?best:-1;}
+  return bd*stageScale<r?best:-1;}
 orbCv.addEventListener('mousemove',e=>{orbHover=orbPick(e,16);orbCv.style.cursor=orbHover>=0?'pointer':'default';});
 orbCv.addEventListener('mouseleave',()=>{orbHover=-1;});
 orbCv.addEventListener('click',e=>{const i=orbPick(e,18);selectSat(i);});
@@ -4211,7 +4239,7 @@ window.vwNarrateStep=function(k){
 };
 function capClear(){capTimers.forEach(clearTimeout);capTimers=[];}
 function capShow(i){
-  capClear();
+  capHide();
   if(i===7)return; // 视频页由每段配音结束事件推进。
   bar.classList.toggle('top',i===0);   /* 封面页字幕放顶部片头位，避免压住按钮与统计 */
   var list=SHOW_CAPS[i]||[];
@@ -4229,7 +4257,7 @@ function capShow(i){
     t+=step;
   });
 }
-function capHide(){capClear();stopAudio();capState=null;bar.classList.remove('on');}
+function capHide(){capClear();stopAudio();capState=null;capTxt.textContent='';bar.classList.remove('on');}
 function capPause(){if(cur===7&&window.vwTalkPause){window.vwTalkPause(true);return;}capClear();if(curA){try{curA.pause();}catch(e){}}}
 function capResume(){ /* 从暂停时的那句重新播放，后续句按原节奏排定 */
   if(cur===7&&window.vwTalkPause){window.vwTalkPause(false);return;}
