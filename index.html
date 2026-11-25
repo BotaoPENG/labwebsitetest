@@ -2783,24 +2783,27 @@ const SIM=[
 ];
 /* 推演底图：AI 实景照片（SIM_IMG_SRC，key 与 SIM[].k 对应），加载失败退回程序化地形 */
 const SIMIMGS=(typeof SIM_IMG_SRC!=='undefined')?(()=>{const o={};for(const k in SIM_IMG_SRC){const im=new Image();im.src=SIM_IMG_SRC[k];
-  im.onload=function(){const sec=document.getElementById('s6');
-    if(sec&&sec.classList.contains('on')&&!simPlaying)drawSim(simStepI<0?0:simStepI/Math.max(1,SIM[simIdx].steps.length-1),0);};
+  im.onload=function(){if(cur===6&&SIM[simIdx].k===k&&!simPlaying)drawSim();};
   o[k]=im;}return o;})():null;
 let simIdx=0,simStepI=-1,simTimer=null,simPlaying=false;
+let simFrame=0,simDue=0,simRemaining=0,simElapsed=0,simStartedAt=0;
+const simScan=document.getElementById('simScan');
+const simPlay=document.getElementById('simPlay');
 let simGap=3400;   /* 每一步推演的间隔；展示模式会按解说节奏调快 */
 document.getElementById('simScenes').innerHTML=SIM.map((s,i)=>
   '<div class="simBtn'+(i===0?' on':'')+'" data-i="'+i+'"><b>'+s.n+'</b><span>'+s.d+' · 传统 '+Math.round(s.old/60)+' h → 平台 '+s.new+' min</span></div>').join('');
 document.querySelectorAll('.simBtn').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.simBtn').forEach(x=>x.classList.remove('on'));b.classList.add('on');
-  simIdx=+b.dataset.i;simStepI=-1;simPlaying=false;
-  document.getElementById('simPlay').textContent='▶ 开始推演';
+  pauseSim();
+  simIdx=+b.dataset.i;simStepI=-1;simElapsed=0;simRemaining=0;
+  simScan.style.display='none';simPlay.textContent='▶ 开始推演';
   document.getElementById('logList').innerHTML='';
   document.getElementById('simT').textContent='00:00';document.getElementById('simTag').textContent='待命';
   document.getElementById('stepNow').textContent=SIM[simIdx].n+' · 点击「开始推演」';
   document.getElementById('stepDesc').textContent=SIM[simIdx].steps[0].d;
   document.getElementById('cmpOld').style.width='0';document.getElementById('cmpNew').style.width='0';
   document.getElementById('cmpOldV').textContent='—';document.getElementById('cmpNewV').textContent='—';
-  drawSim(0,0);});
+  drawSim();});
 function simRender(){
   const S=SIM[simIdx],st=S.steps[Math.max(0,simStepI)];
   document.getElementById('logList').innerHTML=S.steps.map((s,i)=>
@@ -2816,29 +2819,62 @@ function simRender(){
   document.getElementById('cmpNew').style.width=newP+'%';
   document.getElementById('cmpOldV').textContent=Math.round(S.old*(oldP/100))+' min';
   document.getElementById('cmpNewV').textContent=Math.round(S.new*(newP/100))+' min';
-  drawSim(simStepI/Math.max(1,S.steps.length-1),st.np/100);
+  drawSim();
+}
+function simFinished(){return simStepI===SIM[simIdx].steps.length-1;}
+function simSchedule(delay){
+  clearTimeout(simTimer);
+  simRemaining=delay;simDue=performance.now()+delay;
+  simTimer=setTimeout(()=>{if(cur===6&&simPlaying)simStep(1);},delay);
+}
+function simAnimate(){
+  if(cur!==6||!simPlaying)return;
+  drawSim();
+  simFrame=requestAnimationFrame(simAnimate);
+}
+function pauseSim(){
+  if(!simPlaying)return false;
+  const now=performance.now();
+  simElapsed+=now-simStartedAt;
+  simRemaining=Math.max(0,simDue-now);
+  simPlaying=false;
+  clearTimeout(simTimer);simTimer=null;
+  cancelAnimationFrame(simFrame);simFrame=0;
+  simScan.style.animationPlayState='paused';simPlay.textContent='▶ 继续推演';
+  return true;
+}
+function resumeSim(){
+  if(cur!==6||simPlaying||simStepI<0||simFinished())return;
+  simStartedAt=performance.now();simPlaying=true;
+  simScan.style.display='block';simScan.style.animationPlayState='running';
+  simPlay.textContent='❚❚ 暂停';
+  simSchedule(simRemaining);simFrame=requestAnimationFrame(simAnimate);
 }
 function simStep(d){
-  const S=SIM[simIdx];
-  simStepI=Math.max(0,Math.min(S.steps.length-1,simStepI+d));
+  if(cur!==6)return;
+  simStepI=Math.max(0,Math.min(SIM[simIdx].steps.length-1,simStepI+d));
+  if(simFinished()){
+    pauseSim();
+    simScan.style.display='none';simPlay.textContent='↻ 重新推演';
+  }else if(simPlaying){
+    simSchedule(simGap);
+  }else{
+    simPlay.textContent='▶ 继续推演';
+  }
+  simRemaining=simGap;
   simRender();
 }
 function simToggle(){
-  const S=SIM[simIdx];
-  if(simPlaying){clearTimeout(simTimer);simPlaying=false;document.getElementById('simPlay').textContent='▶ 继续推演';return;}
-  if(simStepI>=S.steps.length-1)simStepI=-1;
-  simPlaying=true;document.getElementById('simPlay').textContent='❚❚ 暂停';
-  document.getElementById('simScan').style.display='block';
-  const tick=()=>{if(!simPlaying)return;simStep(1);
-    if(simStepI>=S.steps.length-1){simPlaying=false;document.getElementById('simPlay').textContent='↻ 重新推演';
-      document.getElementById('simScan').style.display='none';return;}
-    simTimer=setTimeout(tick,simGap);};
-  tick();
+  if(cur!==6||pauseSim())return;
+  if(simStepI<0||simFinished()){
+    simElapsed=0;simStepI=-1;simStep(1);
+  }
+  resumeSim();
 }
 /* 自动演示用：切到第 i 个场景并从头推演（与解说词逐句对应） */
 function simAuto(i){
   var b=document.querySelector('.simBtn[data-i="'+i+'"]');
-  if(!b)return;
+  if(!b||cur!==6)return;
   b.click();                       /* 点击即复位到该场景：simStepI=-1, simPlaying=false */
   if(!simPlaying)simToggle();
 }
@@ -2846,15 +2882,17 @@ function simAuto(i){
 const simCv=document.getElementById('simCv');
 let simBase=null,simW=0,simH=0;
 function simBuild(){const W=simCv.clientWidth,H=simCv.clientHeight;simW=W;simH=H;
-  simBase=new Float32Array(Math.floor(W/4)*Math.floor(H/4));let i=0;
-  for(let y=0;y<H;y+=4)for(let x=0;x<W;x+=4)simBase[i++]=fbm(x/120+3,y/120+5,5);}
-function drawSim(prog,conf){
+  const cols=Math.ceil(W/4),rows=Math.ceil(H/4);
+  simBase=new Float32Array(cols*rows);
+  for(let y=0;y<rows;y++)for(let x=0;x<cols;x++)simBase[y*cols+x]=fbm(x/30+3,y/30+5,5);}
+function drawSim(){
+  if(cur!==6)return;
+  const prog=Math.max(0,simStepI)/(SIM[simIdx].steps.length-1);
   const d=cvFit(simCv),g=simCv.getContext('2d');
   const W=simCv.clientWidth,H=simCv.clientHeight;
-  if(!simBase||Math.abs(W-simW)>2||Math.abs(H-simH)>2)simBuild();
   g.setTransform(d,0,0,d,0,0);g.clearRect(0,0,W,H);
-  const kind=SIM[simIdx].k,step=4,cols=Math.floor(W/step),rows=Math.floor(H/step);
-  const t=performance.now()/1000;
+  const kind=SIM[simIdx].k,step=4,cols=Math.ceil(W/step),rows=Math.ceil(H/step);
+  const t=(simElapsed+(simPlaying?performance.now()-simStartedAt:0))/1000;
   const simImg=SIMIMGS?SIMIMGS[kind]:null;
   const useImg=simImg&&simImg.complete&&simImg.naturalWidth;
   if(useImg){
@@ -2868,6 +2906,7 @@ function drawSim(prog,conf){
     else if(kind==='flood'){g.fillStyle='rgba(30,90,170,'+(prog*.26)+')';g.fillRect(0,H*(1-prog*.5),W,H*prog*.5);}
     else if(kind==='crop'){g.fillStyle='rgba(190,150,60,'+(prog*.16)+')';g.fillRect(0,0,W,H);}
   }else{
+  if(!simBase||W!==simW||H!==simH)simBuild();
   for(let ry=0;ry<rows;ry++)for(let rx=0;rx<cols;rx++){
     const h=simBase[ry*cols+rx],fx=rx/cols,fy=ry/rows;let r,gg,b;
     if(kind==='fire'||kind==='crop'){
@@ -2911,9 +2950,9 @@ function drawSim(prog,conf){
   const gx=W-92,gy=H-70;
   const tgt=[boxes[0][0]*W+boxes[0][2]*W/2,boxes[0][1]*H+boxes[0][3]*H/2];
   const sat=[W-92,86];
-  g.strokeStyle='rgba(63,169,255,.5)';g.setLineDash([6,5]);g.lineDashOffset=-(performance.now()/28)%22;g.lineWidth=1.8;
+  g.strokeStyle='rgba(63,169,255,.5)';g.setLineDash([6,5]);g.lineDashOffset=-(t*1000/28)%22;g.lineWidth=1.8;
   g.beginPath();g.moveTo(gx,gy);g.lineTo(sat[0],sat[1]);g.lineTo(tgt[0],tgt[1]);g.stroke();g.setLineDash([]);
-  for(let i=0;i<4;i++){const p=((performance.now()/1500+i/4)%1);
+  for(let i=0;i<4;i++){const p=((t/1.5+i/4)%1);
     const a=tgt,b=i%2?sat:[gx,gy];
     const px=a[0]+(b[0]-a[0])*p,py=a[1]+(b[1]-a[1])*p;
     g.fillStyle='rgba(170,235,255,.95)';g.beginPath();g.arc(px,py,3,0,6.283);g.fill();}
@@ -2924,10 +2963,9 @@ function drawSim(prog,conf){
   // 地面站
   g.fillStyle='#ffcc5c';g.beginPath();g.arc(gx,gy,6,0,6.283);g.fill();
   g.fillStyle='rgba(255,235,180,.9)';g.font='700 13px sans-serif';g.fillText('地面站 · 边缘算力',gx-96,gy+5);
-  if(!simPlaying&&simStepI<SIM[simIdx].steps.length-1)return;
-  requestAnimationFrame(()=>drawSim(prog,conf));
 }
-ENTERS[6]=()=>{simBase=null;if(simStepI<0){simW=0;simH=0;drawSim(0,0);}else simRender();};
+ENTERS[6]=drawSim;
+LEAVES[6]=pauseSim;
 
 /* ===================== S7 AI 驾驶舱 ===================== */
 /* 决策辅助 · 内联配图（SVG，深色底，answer() 以 data:image/svg+xml 渲染） */
@@ -3671,6 +3709,7 @@ let auto=null,autoT=[];
 /* 每页停留毫秒 —— 展示模式下由 tools/update_timing.py 按解说词配音实际时长自动重算，
    页内动画节奏也由它派生，改这一处即可。讲解模式沿用同一组数值。 */
 const AUTOD=[18400,23300,32000,30500,26200,28000,44900,VW_DUR,26200,20800,37600,43600]; /* 末项=调度演练场（含配音解说，gameAuto 节奏按 AUTOD[11] 百分比推进） */
+const simScenarioCues=[0,null,1,2,3,null];  // 火情、城市暴雨、海上遇险、农业干旱的起始句
 const AUTO=[
   {d:AUTOD[0],f:()=>{}},                                                 // 首页
   {d:AUTOD[1],f:()=>{}},                                                 // 总览
@@ -3688,21 +3727,15 @@ const AUTO=[
       const t=setInterval(()=>{if(i<val.length){u.value=val[i][0];v.value=val[i][1];y.value=val[i][2];renderPlans();i++;}else clearInterval(t);},gap);
       autoT.push(t);}},                                                  // 算力
   {d:AUTOD[5],f:()=>{let i=0;const gap=Math.max(2000,AUTOD[5]/4);const t=setInterval(()=>{if(i<4){document.querySelectorAll('.indTab')[i].click();i++;}else clearInterval(t);},gap);autoT.push(t);}}, // 应用
-  {d:AUTOD[6],f:()=>{
-      /* 场景切换与解说词逐句同步：火情 → 城市内涝 → 海上遇险 → 农业干旱
-         map 与 SHOW_CAPS[6] 一一对应，非 null 的位置在该句出现时切换场景并重新推演 */
-      const map=[0,null,1,2,3,null];
-      const ds=((typeof SHOW_DUR!=='undefined')&&SHOW_DUR&&SHOW_DUR[6])?SHOW_DUR[6]:null;
-      simGap=ds?1900:3400;                                  /* 展示模式下推演节奏加快，尽量走完整条链路 */
-      let t=250;
-      map.forEach((m,k)=>{
-        if(m!==null&&m!==undefined){
-          const at=Math.round(t);
-          autoT.push(setTimeout(()=>{if(auto)simAuto(m);},at));
-        }
-        t+=(ds&&ds[k])?ds[k]*1000+550:AUTOD[6]/map.length;   /* 与字幕推进同一步长 */
+  {d:AUTOD[6],f:(elapsed=0)=>{
+      const narrated=document.body.classList.contains('showmode');
+      simGap=narrated?1900:3400;
+      if(narrated)return;  // 展示模式在该句字幕和旁白开始时同步切换场景。
+      simScenarioCues.forEach((scenario,cue)=>{
+        const delay=250+cue*AUTOD[6]/simScenarioCues.length-elapsed;
+        if(scenario!==null&&delay>=0)autoT.push(setTimeout(()=>simAuto(scenario),delay));
       });
-      autoT.push(setInterval(()=>{},9999));}},              // 推演
+  }},
   {d:VW_DUR,f:()=>{}},                                                   // 实景视频墙（进入即由 ENTERS[7] 起播，此处无需额外动作）
   {d:AUTOD[8],f:()=>{ /* 驾驶舱：随机抽两题演示，点击即高亮左侧问题 */
       const pool=[0,1,2,3,4];
@@ -3717,67 +3750,73 @@ const AUTO=[
 function toggleAuto(){if(auto)pauseAuto();else if(autoPaused)resumeAuto();else startAuto();}
 function startAuto(fromIdx){
   /* 从当前页开始自动演示（封面大按钮传 0，即从头开始完整走一遍） */
-  auto=1;document.getElementById('autoBtn').textContent='❚❚ 停止演示';document.getElementById('autoBtn').classList.add('playing');
+  auto=1;document.getElementById('autoBtn').textContent='❚❚ 暂停演示';document.getElementById('autoBtn').classList.add('playing');
   document.getElementById('modeChip').textContent='自动演示中';document.getElementById('modeChip').classList.add('on');
   runAuto(fromIdx===undefined?cur:fromIdx);
 }
 /* 右上角状态胶囊：显示本页停留倒计时（自动演示 / 展示模式通用） */
 let cdTimer=null;
 function cdStop(){if(cdTimer){clearInterval(cdTimer);cdTimer=null;}}
-function cdStart(ms){
+let autoPaused=false,autoPageT0=0,autoPauseLeft=0,simResumeAfterPause=false;
+function pageTimeLeft(){
+  return autoPaused?autoPauseLeft:Math.max(0,AUTO[cur].d-(performance.now()-autoPageT0));
+}
+function cdStart(){
   cdStop();
   if(cur===7){vwProgress();return;}
-  const chip=document.getElementById('modeChip');if(!chip)return;
-  let left=Math.round(ms/1000);
+  const chip=document.getElementById('modeChip');
   const tick=()=>{
-    if(!auto){cdStop();return;}
-    const base=chip.textContent.replace(/\s*[·•]\s*\d+\s*s$/,'');
-    chip.textContent=base+' · '+left+'s';
-    if(left<=0){cdStop();return;}
-    left--;
+    const seconds=Math.ceil(pageTimeLeft()/1000);
+    const label=chip.textContent.replace(/\s*[·•]\s*\d+\s*s$/,'')+' · '+seconds+'s';
+    if(chip.textContent!==label)chip.textContent=label;
   };
-  tick();cdTimer=setInterval(tick,1000);
+  tick();cdTimer=setInterval(tick,250);
+}
+function schedulePageTurn(){
+  cdStart();
+  if(cur!==7){
+    const next=(cur+1)%scenes.length;
+    autoT.push(setTimeout(()=>runAuto(next),pageTimeLeft()));
+  }
 }
 function runAuto(i){
   if(!auto)return;
-  autoPageT0=Date.now();
-  showScene(i);if(i!==7&&ENTERS[i])ENTERS[i]();AUTO[i].f&&AUTO[i].f();
-  cdStart(AUTO[i].d);
-  if(i!==7)autoT.push(setTimeout(()=>{if(!auto)return;runAuto((i+1)%scenes.length);},AUTO[i].d));
+  autoPageT0=performance.now();
+  showScene(i);AUTO[i].f&&AUTO[i].f();
+  schedulePageTurn();
 }
-let autoPaused=false,autoPauseIdx=0,autoPauseLeft=0,autoPageT0=0;
 function pauseAuto(){
   if(!auto)return;
+  autoPauseLeft=pageTimeLeft();
   if(cur===7){vwResumeAfterPause=vwPlaying;if(vwPlaying)vwPlayPause();}
-  autoPauseIdx=(typeof cur!=='undefined')?cur:0;
-  autoPauseLeft=Math.max(1500,((AUTO[autoPauseIdx]&&AUTO[autoPauseIdx].d)||15000)-(Date.now()-autoPageT0));
+  simResumeAfterPause=cur===6&&pauseSim();
   auto=null;autoT.forEach(x=>{clearTimeout(x);clearInterval(x);});autoT=[];cdStop();
   autoPaused=true;
   const b=document.getElementById('autoBtn');b.textContent='▶ 继续演示';b.classList.remove('playing');
-  document.getElementById('modeChip').textContent='已暂停';document.getElementById('modeChip').classList.remove('on');
-  if(simPlaying)simToggle();
+  const chip=document.getElementById('modeChip');
+  chip.textContent=cur===7?'已暂停':'已暂停 · '+Math.ceil(autoPauseLeft/1000)+'s';
+  chip.classList.remove('on');
 }
 function resumeAuto(){
   if(!autoPaused)return;
-  autoPaused=false;auto=1;autoPageT0=Date.now();
-  const b=document.getElementById('autoBtn');b.textContent='❚❚ 停止演示';b.classList.add('playing');
+  autoPaused=false;auto=1;
+  autoPageT0=performance.now()-(AUTO[cur].d-autoPauseLeft);
+  const b=document.getElementById('autoBtn');b.textContent='❚❚ 暂停演示';b.classList.add('playing');
   document.getElementById('modeChip').textContent='自动演示中';document.getElementById('modeChip').classList.add('on');
-  const i=autoPauseIdx;
-  if(i===7){
+  if(cur===7){
     if(vwResumeAfterPause&&!vwFinished)vwPlayPause();
     vwResumeAfterPause=false;vwProgress();vwMaybeAdvance();return;
   }
-  cdStart(autoPauseLeft);
-  autoT.push(setTimeout(()=>{if(!auto)return;runAuto((i+1)%scenes.length);},autoPauseLeft));
-  /* 讲解版无音频：重跑本页动画脚本（展示版的字幕/配音由 show.js 单独从当句恢复） */
-  if(!document.body.classList.contains('showmode')){AUTO[i].f&&AUTO[i].f();}
+  if(simResumeAfterPause){resumeSim();simResumeAfterPause=false;}
+  schedulePageTurn();
+  if(!document.body.classList.contains('showmode')){AUTO[cur].f&&AUTO[cur].f(AUTO[cur].d-autoPauseLeft);}
 }
 function stopAuto(){
   auto=null;autoPaused=false;autoT.forEach(x=>{clearTimeout(x);clearInterval(x);});autoT=[];cdStop();
   gStopAll();
   const b=document.getElementById('autoBtn');b.textContent='▶ 自动演示';b.classList.remove('playing');
   document.getElementById('modeChip').textContent='讲解模式';document.getElementById('modeChip').classList.remove('on');
-  if(simPlaying)simToggle();
+  pauseSim();
 }
 ENTERS[1]=()=>{};
 go(0);ENTERS[0]();
@@ -4177,20 +4216,11 @@ vBtn.addEventListener('click',function(e){
 
 pBtn.addEventListener('click',function(e){
   e.stopPropagation();
-  if((typeof auto!=='undefined')&&auto){
-    if(typeof pauseAuto==='function')pauseAuto();else stopAuto();
-    capPause();
-  }else if(typeof autoPaused!=='undefined'&&autoPaused){
-    capResume();
-    if(typeof resumeAuto==='function')resumeAuto();
-  }else{
-    startAuto((typeof cur!=='undefined')?cur:0);
-  }
-  syncP();
+  toggleAuto();
 });
 
 /* ---------- 字幕调度 ---------- */
-var capTimers=[],capState=null;
+var capTimers=[],nextCaption=0;
 // Six narrated highlights; all timing follows actual audio playback.
 var vwTalk=null,vwTalkTimer=null;
 window.vwNarrationReady=function(){return !!(vwTalk&&vwTalk.done);};
@@ -4211,7 +4241,7 @@ window.vwNarrateStep=function(k){
   window.vwTalkStop();
   var duration=SHOW_DUR[7][k];
   var state=vwTalk={k:k,duration:duration,elapsed:0,last:performance.now(),paused:false,done:false};
-  capState={i:7,k:k};bar.classList.remove('top');bar.classList.add('on');
+  bar.classList.remove('top');bar.classList.add('on');
   capTxt.innerHTML=SHOW_CAPS[7][k];playAudio(7,k);
   var a=curA;
   function finish(){
@@ -4238,43 +4268,36 @@ window.vwNarrateStep=function(k){
   },100);
 };
 function capClear(){capTimers.forEach(clearTimeout);capTimers=[];}
-function capShow(i){
-  capHide();
-  if(i===7)return; // 视频页由每段配音结束事件推进。
-  bar.classList.toggle('top',i===0);   /* 封面页字幕放顶部片头位，避免压住按钮与统计 */
-  var list=SHOW_CAPS[i]||[];
-  if(!list.length){bar.classList.remove('on');return;}
-  /* 优先按每条配音的实际时长推进（长短句都能完整显示）；没有 SHOW_DUR 时退回平均分配 */
-  var ds=((typeof SHOW_DUR!=='undefined')&&SHOW_DUR&&SHOW_DUR[i])?SHOW_DUR[i]:null;
-  var pdur=((typeof AUTO!=='undefined')&&AUTO[i]&&AUTO[i].d)?AUTO[i].d:15000;
-  var t=250;
-  list.forEach(function(txt,k){
-    capTimers.push(setTimeout(function(){
-      capState={i:i,k:k};
-      capTxt.innerHTML=txt;bar.classList.add('on');playAudio(i,k);
-    },Math.round(t)));
-    var step=ds&&ds[k]?ds[k]*1000+550:(pdur/list.length);
-    t+=step;
+/* 句首时间以本页实际播放时长为基准。恢复时只安排尚未开始的句子。 */
+function scheduleCaptions(i){
+  const list=SHOW_CAPS[i]||[], durations=SHOW_DUR[i];
+  const elapsed=AUTO[i].d-pageTimeLeft();
+  let at=250;
+  list.forEach((txt,k)=>{
+    if(k>=nextCaption){
+      capTimers.push(setTimeout(()=>{
+        nextCaption=k+1;
+        capTxt.innerHTML=txt;bar.classList.add('on');playAudio(i,k);
+        if(i===6){
+          const scene=simScenarioCues[k];
+          if(scene!=null)simAuto(scene);
+        }
+      },Math.max(0,at-elapsed)));
+    }
+    at+=durations&&durations[k]?durations[k]*1000+550:AUTO[i].d/list.length;
   });
 }
-function capHide(){capClear();stopAudio();capState=null;capTxt.textContent='';bar.classList.remove('on');}
-function capPause(){if(cur===7&&window.vwTalkPause){window.vwTalkPause(true);return;}capClear();if(curA){try{curA.pause();}catch(e){}}}
-function capResume(){ /* 从暂停时的那句重新播放，后续句按原节奏排定 */
-  if(cur===7&&window.vwTalkPause){window.vwTalkPause(false);return;}
-  var st=capState;if(!st)return;
-  var i=st.i,list=SHOW_CAPS[i]||[];if(!list.length)return;
-  var ds=((typeof SHOW_DUR!=='undefined')&&SHOW_DUR&&SHOW_DUR[i])?SHOW_DUR[i]:null;
-  var pdur=((typeof AUTO!=='undefined')&&AUTO[i]&&AUTO[i].d)?AUTO[i].d:15000;
-  var t=60;
-  for(var j=st.k;j<list.length;j++){
-    (function(txt,jj){
-      capTimers.push(setTimeout(function(){
-        capState={i:i,k:jj};
-        capTxt.innerHTML=txt;bar.classList.add('on');playAudio(i,jj);
-      },Math.round(t)));
-      var step=ds&&ds[jj]?ds[jj]*1000+550:(pdur/list.length);t+=step;
-    })(list[j],j);
+function capHide(){capClear();stopAudio();nextCaption=0;capTxt.textContent='';bar.classList.remove('on');}
+function capPause(){
+  capClear();
+  if(curA)curA.pause();
+}
+function capResume(){
+  if(voiceOn&&curA&&!curA.ended){
+    const audio=curA;
+    audio.play().catch(error=>{if(error.name!=='AbortError')audio._playFailed=true;});
   }
+  scheduleCaptions(cur);
 }
 
 /* ---------- 包装自动演示入口（runAuto 为全局函数声明，重新赋值即可生效） ----------
@@ -4288,7 +4311,26 @@ runAuto=function(i){
     playedOnce=true;
   }
   if(cur===7&&i!==7&&window.vwTalkStop)window.vwTalkStop();
-  capShow(i);_runAuto(i);
+  capHide();
+  _runAuto(i);
+  if(i!==7){
+    bar.classList.toggle('top',i===0);
+    scheduleCaptions(i);
+  }
+};
+var _pauseAuto=pauseAuto, _resumeAuto=resumeAuto;
+pauseAuto=function(){
+  if(!auto)return;
+  _pauseAuto();
+  if(cur!==7)capPause();
+  syncP();
+};
+resumeAuto=function(){
+  if(!autoPaused)return;
+  const wasVideoWall=cur===7;
+  _resumeAuto();
+  if(!wasVideoWall)capResume();
+  syncP();
 };
 var _stopAuto=stopAuto;
 stopAuto=function(){
@@ -4302,7 +4344,7 @@ startAuto=function(idx){
   _startAuto(idx);
   var chip=document.getElementById('modeChip');
   if(chip){chip.textContent='展示模式 · '+(showLoop?'循环播放':'自动播放');chip.classList.add('on');}
-  if(cur===7)vwProgress();
+  if(cur===7)vwProgress();else cdStart();
   if(typeof syncP==='function')syncP();
 };
 
